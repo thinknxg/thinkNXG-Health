@@ -1,0 +1,21 @@
+{
+ "app": "healthcare",
+ "creation": "2025-11-20 19:22:49.723194",
+ "docstatus": 0,
+ "doctype": "Desktop Icon",
+ "hidden": 0,
+ "icon": "heart-handshake",
+ "icon_type": "Link",
+ "idx": 6,
+ "label": "Insurance",
+ "link_to": "Insurance",
+ "link_type": "Workspace Sidebar",
+ "modified": "2026-10-24 21:29:10.737942",
+ "modified_by": "Administrator",
+ "name": "Insurance",
+ "owner": "Administrator",
+ "parent_icon": "Marley Health",
+ "restrict_removal": 0,
+ "roles": [],
+ "standard": 1
+}

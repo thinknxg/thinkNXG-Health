@@ -1,0 +1,397 @@
+# Copyright (c) 2023, healthcare and Contributors
+# See license.txt
+
+import frappe
+
+from healthcare.tests.utils import HealthcareTestSuite
+
+
+class TestObservationTemplate(HealthcareTestSuite):
+	def test_observation_item(self):
+		obs_template = create_observation_template("Total Cholesterol", sample_required=False)
+		self.assertTrue(frappe.db.exists("Item", obs_template.item_code))
+		self.assertEqual(
+			frappe.db.get_value("Item Price", {"item_code": obs_template.item_code}, "price_list_rate"),
+			obs_template.rate,
+		)
+
+	def test_observation_item_name_on_update(self):
+		observation = "_Test Observation Item Name Sync"
+		item_code = "_Test Observation Item Name Sync Code"
+		obs_template = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": observation,
+				"observation_category": "Imaging",
+				"item_code": item_code,
+				"item_group": "Services",
+				"is_billable": 1,
+				"rate": 300,
+			}
+		).insert()
+		self.assertFalse(obs_template.get("template"))
+		self.assertEqual(obs_template.item, item_code)
+		self.assertTrue(frappe.db.exists("Item Price", {"item_code": item_code}))
+
+		obs_template.rate = 350
+		obs_template.save()
+
+		self.assertEqual(frappe.db.get_value("Item", item_code, "item_name"), observation)
+		self.assertEqual(
+			frappe.db.get_value("Item Price", {"item_code": item_code}, "item_name"), observation
+		)
+
+	def test_self_reference_not_allowed(self):
+		parent = create_grouped_observation_template("Fasting and PP Sugar")
+
+		parent.append("observation_component", {"observation_template": parent.name})
+
+		with self.assertRaises(frappe.ValidationError):
+			parent.save()
+
+	def test_circular_reference_not_allowed(self):
+		parent = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "Parent Observation Test",
+				"item_code": "POT",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"rate": 300,
+				"is_billable": 1,
+			}
+		)
+		parent.save()
+
+		child = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "Child Observation Test",
+				"item_code": "COT",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"rate": 300,
+				"is_billable": 1,
+			}
+		)
+		child.save()
+
+		parent.append("observation_component", {"observation_template": child.name})
+		parent.save()
+
+		child.append("observation_component", {"observation_template": parent.name})
+
+		with self.assertRaises(frappe.ValidationError):
+			child.save()
+
+	def test_nesting_depth_limit(self):
+		lvl1 = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "Package 1",
+				"item_code": "PKG1",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"is_billable": 1,
+				"rate": 300,
+			}
+		)
+		lvl1.save()
+
+		lvl2 = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "Complete Blood Count",
+				"item_code": "CBC",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"is_billable": 1,
+				"rate": 300,
+			}
+		)
+		lvl2.save()
+
+		lvl3 = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "Differential Leukocyte Count",
+				"item_code": "DLC",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"is_billable": 1,
+				"rate": 300,
+			}
+		)
+		lvl3.save()
+
+		lvl4 = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "Lymphocytes",
+				"item_code": "LYM",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"is_billable": 1,
+				"rate": 300,
+			}
+		)
+		lvl4.save()
+
+		lvl1.append("observation_component", {"observation_template": lvl2.name})
+		lvl1.save()
+
+		lvl2.append("observation_component", {"observation_template": lvl3.name})
+		lvl2.save()
+
+		lvl3.append("observation_component", {"observation_template": lvl4.name})
+		lvl3.save()
+
+		lvl5 = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "TooDeep",
+				"item_code": "TD",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"is_billable": 1,
+				"rate": 300,
+			}
+		)
+		lvl5.save()
+
+		lvl4.reload()
+		lvl4.append("observation_component", {"observation_template": lvl5.name})
+
+		with self.assertRaises(frappe.ValidationError):
+			lvl4.save()
+
+	def test_consumables_saved_for_every_stage(self):
+		template = create_observation_template("Consumables All Stages", sample_required=True)
+		for stage in ("Specimen", "Sample Collection", "Observation"):
+			template.append("consumables", {"item_code": "_Test_Stock_Item", "consumed_at": stage})
+		template.save()
+
+		self.assertEqual(len(template.reload().consumables), 3)
+
+	def test_collection_consumable_needs_sample_collection(self):
+		template = create_observation_template("Consumables No Sample", sample_required=False)
+		template.append("consumables", {"item_code": "_Test_Stock_Item", "consumed_at": "Specimen"})
+
+		with self.assertRaises(frappe.ValidationError):
+			template.save()
+
+	def test_an_item_is_listed_once_per_stage(self):
+		template = create_observation_template("Consumables Listed Twice", sample_required=True)
+		for qty in (1, 2):
+			template.append(
+				"consumables", {"item_code": "_Test_Stock_Item", "consumed_at": "Observation", "qty": qty}
+			)
+
+		with self.assertRaises(frappe.ValidationError):
+			template.save()
+
+	def test_consumable_must_be_stock_item(self):
+		template = create_observation_template("Consumables Service Item", sample_required=True)
+		service_item = frappe.db.get_value("Item", {"is_stock_item": 0}, "name")
+		template.append("consumables", {"item_code": service_item, "consumed_at": "Observation"})
+
+		with self.assertRaises(frappe.ValidationError):
+			template.save()
+
+
+def create_observation_template(obs_name, idx="", sample_required=None):
+	if frappe.db.exists("Observation Template", obs_name + str(idx)):
+		return frappe.get_doc("Observation Template", obs_name + str(idx))
+	template = frappe.new_doc("Observation Template")
+	template.observation = obs_name + str(idx)
+	template.item_code = obs_name + str(idx)
+	template.observation_category = "Laboratory"
+	template.permitted_data_type = "Quantity"
+	template.permitted_unit = "mg / dl"
+	template.item_group = "Services"
+	template.sample_collection_required = sample_required
+	template.rate = 300
+	template.abbr = "TC" + str(idx)
+	template.is_billable = 1
+	template.save()
+	return template
+
+
+def create_multi_level_template():
+	"""A 3-level nesting: a top-level package containing a sub-panel, which
+	itself contains the one sample-required leaf. Shared by the recursive
+	sample-collection tests (set_component_observation_data,
+	mark_component_collected, ...)."""
+	leaf = create_observation_template("_Test Nested Leaf", sample_required=True)
+
+	if frappe.db.exists("Observation Template", "_Test Nested Sub Panel"):
+		sub_panel = frappe.get_doc("Observation Template", "_Test Nested Sub Panel")
+	else:
+		sub_panel = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "_Test Nested Sub Panel",
+				"item_code": "_Test Nested Sub Panel",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"rate": 300,
+				"abbr": "TNSP",
+				"is_billable": 1,
+				"observation_component": [{"observation_template": leaf.name}],
+			}
+		)
+		sub_panel.insert()
+
+	if frappe.db.exists("Observation Template", "_Test Top Package"):
+		package = frappe.get_doc("Observation Template", "_Test Top Package")
+	else:
+		package = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "_Test Top Package",
+				"item_code": "_Test Top Package",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"rate": 300,
+				"abbr": "TTP",
+				"is_billable": 1,
+				"observation_component": [{"observation_template": sub_panel.name}],
+			}
+		)
+		package.insert()
+
+	return package, sub_panel, leaf
+
+
+def create_mixed_sub_panel_template():
+	"""A package containing a sub-panel with both a sample-required leaf
+	and a non-sample-required one directly on it."""
+	sample_leaf = create_observation_template("_Test Mixed Sample Leaf", idx=1, sample_required=True)
+	non_sample_leaf = create_observation_template("_Test Mixed Non Sample Leaf", idx=2, sample_required=False)
+
+	if frappe.db.exists("Observation Template", "_Test Mixed Sub Panel"):
+		sub_panel = frappe.get_doc("Observation Template", "_Test Mixed Sub Panel")
+	else:
+		sub_panel = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "_Test Mixed Sub Panel",
+				"item_code": "_Test Mixed Sub Panel",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"rate": 300,
+				"abbr": "TMSP",
+				"is_billable": 1,
+				"observation_component": [
+					{"observation_template": sample_leaf.name},
+					{"observation_template": non_sample_leaf.name},
+				],
+			}
+		)
+		sub_panel.insert()
+
+	if frappe.db.exists("Observation Template", "_Test Mixed Package"):
+		package = frappe.get_doc("Observation Template", "_Test Mixed Package")
+	else:
+		package = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "_Test Mixed Package",
+				"item_code": "_Test Mixed Package",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"rate": 300,
+				"abbr": "TMPKG",
+				"is_billable": 1,
+				"observation_component": [{"observation_template": sub_panel.name}],
+			}
+		)
+		package.insert()
+
+	return package, sub_panel, sample_leaf, non_sample_leaf
+
+
+def create_pure_non_sample_sub_panel_template():
+	"""A package with a sample-required leaf, plus a sub-panel whose own
+	children are all non-sample-required."""
+	sample_leaf = create_observation_template("_Test Package Own Sample Leaf", idx=3, sample_required=True)
+	non_sample_leaf = create_observation_template("_Test Pure Non Sample Leaf", idx=4, sample_required=False)
+
+	if frappe.db.exists("Observation Template", "_Test Pure Non Sample Sub Panel"):
+		sub_panel = frappe.get_doc("Observation Template", "_Test Pure Non Sample Sub Panel")
+	else:
+		sub_panel = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "_Test Pure Non Sample Sub Panel",
+				"item_code": "_Test Pure Non Sample Sub Panel",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"rate": 300,
+				"abbr": "TPNSP",
+				"is_billable": 1,
+				"observation_component": [{"observation_template": non_sample_leaf.name}],
+			}
+		)
+		sub_panel.insert()
+
+	if frappe.db.exists("Observation Template", "_Test Pure Non Sample Package"):
+		package = frappe.get_doc("Observation Template", "_Test Pure Non Sample Package")
+	else:
+		package = frappe.get_doc(
+			{
+				"doctype": "Observation Template",
+				"observation": "_Test Pure Non Sample Package",
+				"item_code": "_Test Pure Non Sample Package",
+				"observation_category": "Laboratory",
+				"item_group": "Services",
+				"has_component": 1,
+				"rate": 300,
+				"abbr": "TPNPKG",
+				"is_billable": 1,
+				"observation_component": [
+					{"observation_template": sample_leaf.name},
+					{"observation_template": sub_panel.name},
+				],
+			}
+		)
+		package.insert()
+
+	return package, sub_panel, sample_leaf, non_sample_leaf
+
+
+def create_grouped_observation_template(obs_name, idx="", sample_required=None):
+	if frappe.db.exists("Observation Template", obs_name + str(idx)):
+		return frappe.get_doc("Observation Template", obs_name + str(idx))
+	template = frappe.new_doc("Observation Template")
+	template.observation = obs_name + str(idx)
+	template.item_code = obs_name + str(idx)
+	template.observation_category = "Laboratory"
+	template.item_group = "Services"
+	template.has_component = 1
+	template.rate = 300
+	template.abbr = "CBC" + str(idx)
+	template.is_billable = 1
+	child_idx = (idx if idx else 0) + 1
+	obs_template = create_observation_template(obs_name, child_idx, sample_required)
+	template.append(
+		"observation_component",
+		{
+			"observation_template": obs_template.name,
+			"abbr": "CBC" + str(child_idx),
+		},
+	)
+	template.save()
+	return template

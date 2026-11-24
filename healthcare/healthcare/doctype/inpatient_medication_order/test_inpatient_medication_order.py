@@ -1,0 +1,341 @@
+# Copyright (c) 2020, Frappe Technologies Pvt. Ltd. and Contributors
+# See license.txt
+
+
+import frappe
+from frappe.utils import add_days, getdate, now_datetime
+
+from healthcare.healthcare.doctype.inpatient_record.inpatient_record import (
+	admit_patient,
+	discharge_patient,
+	schedule_discharge,
+)
+from healthcare.healthcare.doctype.inpatient_record.test_inpatient_record import (
+	create_inpatient,
+	get_healthcare_service_unit,
+	mark_invoiced_inpatient_occupancy,
+)
+from healthcare.tests.utils import HealthcareTestSuite
+
+
+class TestInpatientMedicationOrder(HealthcareTestSuite):
+	def setUp(self):
+		super().setUp()
+		frappe.db.sql("""delete from `tabInpatient Record`""")
+		self.patient = frappe.get_list("Patient", pluck="name")[0]
+
+		# Admit
+		ip_record = create_inpatient(self.patient)
+		ip_record.expected_length_of_stay = 0
+		ip_record.save()
+		ip_record.reload()
+		service_unit = get_healthcare_service_unit()
+		admit_patient(ip_record, service_unit, now_datetime())
+		self.ip_record = ip_record
+
+	def test_order_creation(self):
+		ipmo = create_ipmo(self.patient)
+		ipmo.submit()
+		ipmo.reload()
+
+		# 3 dosages per day for 2 days
+		self.assertEqual(len(ipmo.medication_orders), 6)
+		self.assertEqual(ipmo.medication_orders[0].date, add_days(getdate(), -1))
+
+		prescription_dosage = frappe.get_doc("Prescription Dosage", "1-1-1")
+		for i in range(len(prescription_dosage.dosage_strength)):
+			self.assertEqual(
+				ipmo.medication_orders[i].time, prescription_dosage.dosage_strength[i].strength_time
+			)
+
+		self.assertEqual(ipmo.medication_orders[3].date, getdate())
+
+	def test_inpatient_validation(self):
+		# Discharge
+		schedule_discharge(frappe.as_json({"patient": self.patient}))
+
+		self.ip_record.reload()
+		mark_invoiced_inpatient_occupancy(self.ip_record)
+
+		self.ip_record.reload()
+		discharge_patient(self.ip_record)
+
+		ipmo = create_ipmo(self.patient)
+		# inpatient validation
+		self.assertRaises(frappe.ValidationError, ipmo.insert)
+
+	def test_status(self):
+		ipmo = create_ipmo(self.patient)
+		ipmo.submit()
+		ipmo.reload()
+
+		self.assertEqual(ipmo.status, "Pending")
+
+		filters = frappe._dict(
+			from_date=add_days(getdate(), -1), to_date=add_days(getdate(), -1), from_time="", to_time=""
+		)
+		ipme = create_ipme(filters)
+		ipme.submit()
+		ipmo.reload()
+		self.assertEqual(ipmo.status, "In Process")
+
+		filters = frappe._dict(from_date=getdate(), to_date=getdate(), from_time="", to_time="")
+		ipme = create_ipme(filters)
+		ipme.submit()
+		ipmo.reload()
+		self.assertEqual(ipmo.status, "Completed")
+
+	def test_transferred_orders_keep_parent_in_process(self):
+		ipmo = create_ipmo(self.patient)
+		ipmo.submit()
+
+		for entry in ipmo.medication_orders:
+			frappe.db.set_value("Inpatient Medication Order Entry", entry.name, "status", "Transferred")
+
+		ipmo.reload()
+		ipmo.update_completed_orders()
+		ipmo.reload()
+
+		self.assertEqual(ipmo.completed_orders, 0)
+		self.assertEqual(ipmo.status, "In Process")
+
+	def test_stop_pending_medication_orders_after_partial_completion(self):
+		ipmo = create_ipmo(self.patient)
+		ipmo.submit()
+
+		yesterday = add_days(getdate(), -1)
+		filters = frappe._dict(from_date=yesterday, to_date=yesterday, from_time="", to_time="")
+		ipme = create_ipme(filters)
+		ipme.submit()
+		ipmo.reload()
+
+		pending_rows = [entry.name for entry in ipmo.medication_orders if entry.status == "Pending"]
+		ipmo.stop_medication_orders(pending_rows, "Treatment changed")
+		ipmo.reload()
+
+		self.assertEqual(ipmo.status, "Completed")
+		self.assertEqual(ipmo.completed_orders, 3)
+		self.assertTrue(
+			all(entry.status == "Completed" for entry in ipmo.medication_orders if entry.date == yesterday)
+		)
+		self.assertTrue(
+			all(
+				entry.status == "Stopped" and entry.stop_reason == "Treatment changed"
+				for entry in ipmo.medication_orders
+				if entry.date == getdate()
+			)
+		)
+
+		today_filters = frappe._dict(from_date=getdate(), to_date=getdate(), from_time="", to_time="")
+		self.assertIsNone(create_ipme(today_filters))
+
+	def test_stop_medication_orders_blocks_stale_rows(self):
+		ipmo = create_ipmo(self.patient)
+		ipmo.submit()
+
+		yesterday = add_days(getdate(), -1)
+		filters = frappe._dict(from_date=yesterday, to_date=yesterday, from_time="", to_time="")
+		ipme = create_ipme(filters)
+		ipme.submit()
+		ipmo.reload()
+
+		completed_row = ipmo.medication_orders[0].name
+		self.assertRaises(frappe.ValidationError, ipmo.stop_medication_orders, [completed_row], "Stopped")
+
+	def test_draft_medication_entry_removes_stopped_rows(self):
+		ipmo = create_ipmo(self.patient)
+		ipmo.submit()
+
+		today_filters = frappe._dict(from_date=getdate(), to_date=getdate(), from_time="", to_time="")
+		ipme = create_ipme(today_filters)
+		ipme.save()
+
+		ipmo.reload()
+		today_rows = [entry.name for entry in ipmo.medication_orders if entry.date == getdate()]
+		ipmo.stop_medication_orders(today_rows, "Treatment changed")
+
+		ipme.reload()
+		self.assertEqual(len(ipme.get_stopped_medication_order_rows()), 3)
+		self.assertRaises(frappe.ValidationError, ipme.save)
+
+		ipme.reload()
+		ipme.remove_stopped_medication_order_rows()
+		ipme.reload()
+		self.assertEqual(len(ipme.medication_orders), 0)
+
+	def test_draft_medication_entry_reorders_rows_after_removing_stopped_rows(self):
+		ipmo = create_ipmo(self.patient)
+		ipmo.submit()
+
+		filters = frappe._dict(from_date=add_days(getdate(), -1), to_date=getdate(), from_time="", to_time="")
+		ipme = create_ipme(filters)
+		ipme.save()
+
+		ipmo.reload()
+		stopped_rows = [ipmo.medication_orders[1].name, ipmo.medication_orders[3].name]
+		ipmo.stop_medication_orders(stopped_rows, "Treatment changed")
+
+		ipme.reload()
+		ipme.remove_stopped_medication_order_rows()
+		ipme.reload()
+
+		self.assertEqual([entry.idx for entry in ipme.medication_orders], [1, 2, 3, 4])
+
+	def test_multiple_orders_without_patient_encounter(self):
+		first_ipmo = create_ipmo(self.patient)
+		first_ipmo.insert()
+
+		second_ipmo = create_ipmo(self.patient)
+		second_ipmo.start_date = add_days(getdate(), 2)
+		second_ipmo.insert()
+
+		self.assertTrue(first_ipmo.name)
+		self.assertEqual(first_ipmo.docstatus, 0)
+		self.assertFalse(first_ipmo.patient_encounter)
+
+		self.assertTrue(second_ipmo.name)
+		self.assertEqual(second_ipmo.docstatus, 0)
+		self.assertFalse(second_ipmo.patient_encounter)
+
+	def tearDown(self):
+		if frappe.db.get_value("Patient", self.patient, "inpatient_record"):
+			# cleanup - Discharge
+			schedule_discharge(frappe.as_json({"patient": self.patient}))
+			self.ip_record.reload()
+			mark_invoiced_inpatient_occupancy(self.ip_record)
+
+			self.ip_record.reload()
+			discharge_patient(self.ip_record)
+
+		for doctype in ["Inpatient Medication Entry", "Inpatient Medication Order"]:
+			frappe.db.sql(f"delete from `tab{doctype}`")
+
+
+def create_dosage_form():
+	if not frappe.db.exists("Dosage Form", "Tablet"):
+		frappe.get_doc({"doctype": "Dosage Form", "dosage_form": "Tablet"}).insert()
+
+
+def create_drug(item=None):
+	if not item:
+		item = "Dextromethorphan"
+	drug = frappe.db.exists("Item", {"item_code": "Dextromethorphan"})
+	if not drug:
+		drug = frappe.get_doc(
+			{
+				"doctype": "Item",
+				"item_code": "Dextromethorphan",
+				"item_name": "Dextromethorphan",
+				"item_group": "Products",
+				"stock_uom": "Nos",
+				"is_stock_item": 1,
+				"valuation_rate": 50,
+				"opening_stock": 20,
+			}
+		).insert()
+
+
+def get_orders():
+	create_dosage_form()
+	create_drug()
+	return {
+		"drug_code": "Dextromethorphan",
+		"drug_name": "Dextromethorphan",
+		"dosage": "1-1-1",
+		"dosage_form": "Tablet",
+		"period": "2 Day",
+	}
+
+
+def create_ipmo(patient):
+	orders = get_orders()
+	ipmo = frappe.new_doc("Inpatient Medication Order")
+	ipmo.patient = patient
+	ipmo.company = "_Test Company"
+	ipmo.start_date = add_days(getdate(), -1)
+	ipmo.add_order_entries(orders)
+
+	return ipmo
+
+
+def create_ipme(filters, update_stock=0):
+	ipme = frappe.new_doc("Inpatient Medication Entry")
+	ipme.company = "_Test Company"
+	ipme.posting_date = getdate()
+	ipme.update_stock = update_stock
+	if update_stock:
+		ipme.warehouse = "Stores - _TC"
+	for key, value in filters.items():
+		ipme.set(key, value)
+	ipme = ipme.get_medication_orders()
+
+	return ipme
+
+
+class TestInpatientMedicationOrderFromRequests(HealthcareTestSuite):
+	def setUp(self):
+		self.patient = frappe.get_list("Patient", pluck="name")[0]
+		self.practitioner = frappe.get_list("Healthcare Practitioner", pluck="name")[0]
+		self.encounter = self.make_encounter()
+
+	def make_encounter(self):
+		return frappe.get_doc(
+			{
+				"doctype": "Patient Encounter",
+				"patient": self.patient,
+				"practitioner": self.practitioner,
+				"appointment_type": "_Test Appointment Type",
+				"encounter_date": add_days(getdate(), -1),
+			}
+		).insert(ignore_permissions=True)
+
+	def make_medication_request(self, drug="Dextromethorphan"):
+		return frappe.get_doc(
+			{
+				"doctype": "Medication Request",
+				"patient": self.patient,
+				"practitioner": self.practitioner,
+				"company": "_Test Company",
+				"order_group": self.encounter.name,
+				"order_date": add_days(getdate(), -1),
+				"medication_item": drug,
+				"dosage": "1-1-1",
+				"dosage_form": "Tablet",
+				"period": "2 Day",
+			}
+		).insert(ignore_permissions=True, ignore_mandatory=True)
+
+	def make_order(self):
+		order = frappe.new_doc("Inpatient Medication Order")
+		order.patient = self.patient
+		order.company = "_Test Company"
+		order.start_date = add_days(getdate(), -1)
+		return order
+
+	def test_schedule_is_built_from_medication_requests(self):
+		request = self.make_medication_request()
+		order = self.make_order()
+
+		order.get_from_encounter(self.encounter.name)
+
+		# 3 doses a day for 2 days
+		self.assertEqual(len(order.medication_orders), 6)
+		self.assertEqual(order.medication_orders[0].medication_request, request.name)
+
+	def test_pulling_twice_does_not_duplicate_doses(self):
+		self.make_medication_request()
+		order = self.make_order()
+
+		order.get_from_encounter(self.encounter.name)
+		order.get_from_encounter(self.encounter.name)
+
+		self.assertEqual(len(order.medication_orders), 6)
+
+	def test_requests_without_a_schedule_are_skipped(self):
+		request = self.make_medication_request()
+		frappe.db.set_value("Medication Request", request.name, "period", None)
+		order = self.make_order()
+
+		order.get_from_encounter(self.encounter.name)
+
+		self.assertEqual(len(order.medication_orders), 0)

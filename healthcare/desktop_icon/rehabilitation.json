@@ -1,0 +1,21 @@
+{
+ "app": "healthcare",
+ "creation": "2025-11-20 19:22:49.728375",
+ "docstatus": 0,
+ "doctype": "Desktop Icon",
+ "hidden": 0,
+ "icon": "hand-heart",
+ "icon_type": "Link",
+ "idx": 5,
+ "label": "Rehabilitation",
+ "link_to": "Rehabilitation",
+ "link_type": "Workspace Sidebar",
+ "modified": "2026-10-24 21:29:10.737942",
+ "modified_by": "Administrator",
+ "name": "Rehabilitation",
+ "owner": "Administrator",
+ "parent_icon": "Marley Health",
+ "restrict_removal": 0,
+ "roles": [],
+ "standard": 1
+}

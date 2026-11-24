@@ -1,0 +1,93 @@
+{
+ "app": "healthcare",
+ "charts": [
+  {
+   "chart_name": "Department wise Patient Appointments",
+   "label": "Department wise Patient Appointments"
+  }
+ ],
+ "content": "[{\"id\":\"22de3095e6\",\"type\":\"onboarding\",\"data\":{\"onboarding_name\":\"Healthcare Setup Onboarding\",\"col\":12}},{\"id\":\"K_7_NMF8in\",\"type\":\"chart\",\"data\":{\"chart_name\":\"Department wise Patient Appointments\",\"col\":12}},{\"id\":\"B0ieP_wv7A\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Total Patients\",\"col\":3}},{\"id\":\"Mr6_fkNNSj\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Total Patients Admitted\",\"col\":3}},{\"id\":\"A3Zmu5gbXC\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Open Appointments\",\"col\":3}},{\"id\":\"voXYkDJQ9i\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Appointments to Bill\",\"col\":3}},{\"id\":\"8uG-9LNI7O\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"ExWEBG_jka\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Your Shortcuts</span>\",\"col\":12}},{\"id\":\"En_j_WzPsv\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Patient Appointment\",\"col\":4}},{\"id\":\"s2NQX3pIbg\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Patient\",\"col\":4}},{\"id\":\"Zz-9W-sYbO\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Healthcare Service Unit\",\"col\":4}},{\"id\":\"AwZgbqYj8Z\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Healthcare Practitioner\",\"col\":4}},{\"id\":\"9K0olJ6xx0\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Patient History\",\"col\":4}},{\"id\":\"QjWQWuBZS2\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Dashboard\",\"col\":4}}]",
+ "creation": "2020-03-02 17:23:17.919682",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "healthcare",
+ "idx": 0,
+ "is_hidden": 0,
+ "label": "Healthcare",
+ "links": [],
+ "modified": "2026-10-24 22:09:45.077699",
+ "modified_by": "Administrator",
+ "module": "Healthcare",
+ "name": "Healthcare",
+ "number_cards": [
+  {
+   "label": "Total Patients",
+   "number_card_name": "Total Patients"
+  },
+  {
+   "label": "Total Patients Admitted",
+   "number_card_name": "Total Patients Admitted"
+  },
+  {
+   "label": "Open Appointments",
+   "number_card_name": "Open Appointments"
+  },
+  {
+   "label": "Appointments to Bill",
+   "number_card_name": "Appointments to Bill"
+  }
+ ],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "restrict_to_domain": "Healthcare",
+ "roles": [],
+ "sequence_id": 13.0,
+ "shortcuts": [
+  {
+   "color": "Orange",
+   "format": "{} Open",
+   "label": "Patient Appointment",
+   "link_to": "Patient Appointment",
+   "stats_filter": "{\n    \"status\": \"Open\",\n    \"company\": [\"like\", '%' + frappe.defaults.get_global_default(\"company\") + '%']\n}",
+   "type": "DocType"
+  },
+  {
+   "color": "Orange",
+   "format": "{} Active",
+   "label": "Patient",
+   "link_to": "Patient",
+   "stats_filter": "{\n    \"status\": \"Active\"\n}",
+   "type": "DocType"
+  },
+  {
+   "color": "Green",
+   "format": "{} Vacant",
+   "label": "Healthcare Service Unit",
+   "link_to": "Healthcare Service Unit",
+   "stats_filter": "{\n    \"occupancy_status\": \"Vacant\",\n    \"is_group\": 0,\n    \"company\": [\"like\", \"%\" + frappe.defaults.get_global_default(\"company\") + \"%\"]\n}",
+   "type": "DocType"
+  },
+  {
+   "label": "Healthcare Practitioner",
+   "link_to": "Healthcare Practitioner",
+   "type": "DocType"
+  },
+  {
+   "label": "Patient History",
+   "link_to": "patient_history",
+   "type": "Page"
+  },
+  {
+   "label": "Dashboard",
+   "link_to": "Healthcare",
+   "type": "Dashboard"
+  }
+ ],
+ "title": "Healthcare",
+ "type": "Workspace"
+}
